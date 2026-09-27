@@ -1,11 +1,13 @@
 """Получение почасовой уличной погоды от WeatherAPI.com.
 
 WeatherAPI.com — бесплатный план: 1000 запросов/день.
-API: http://api.weatherapi.com/v1/forecast.json?key=KEY&q=LAT,LON&hours=N
+API: https://api.weatherapi.com/v1/forecast.json?key=KEY&q=LAT,LON&hours=N
+
+Время от API — в локальном часовом поясе локации (tz_id из location).
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import requests
@@ -13,6 +15,18 @@ import requests
 import config
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_local_time(time_str: str, tz_offset_hours: float) -> datetime:
+    """Парсит время от WeatherAPI и конвертирует в UTC.
+
+    WeatherAPI возвращает время в часовом поясе локации (tz_id).
+    Мы используем tz_offset_hours из location для конвертации в UTC.
+    """
+    dt = datetime.fromisoformat(time_str)
+    # Сдвигаем обратно к UTC
+    dt_utc = dt - timedelta(hours=tz_offset_hours)
+    return dt_utc.replace(tzinfo=timezone.utc)
 
 
 def fetch_hourly_weather(
@@ -52,6 +66,18 @@ def fetch_hourly_weather(
         logger.error("WeatherAPI.com error: %s", error.get("message"))
         return []
 
+    # Извлекаем часовой пояс локации
+    location = data.get("location", {})
+    tz_offset = location.get("tz_id", "UTC")
+    # Определяем смещение UTC для Moscow = +3, London = 0 и т.д.
+    tz_offsets = {
+        "Europe/Moscow": 3,
+        "Europe/London": 0,
+        "Europe/Berlin": 1,
+        "UTC": 0,
+    }
+    offset_hours = tz_offsets.get(tz_offset, 0)
+
     forecastdays = data.get("forecast", {}).get("forecastday", [])
     if not forecastdays:
         logger.warning("WeatherAPI.com returned no forecast data")
@@ -64,7 +90,7 @@ def fetch_hourly_weather(
             if not time_str:
                 continue
             try:
-                dt = datetime.fromisoformat(time_str).replace(tzinfo=timezone.utc)
+                dt = _parse_local_time(time_str, offset_hours)
             except ValueError:
                 continue
             result.append({
@@ -73,7 +99,10 @@ def fetch_hourly_weather(
                 "humidity": hour_entry.get("humidity"),
             })
 
-    logger.info("WeatherAPI.com: fetched %d hourly records", len(result))
+    logger.info(
+        "WeatherAPI.com: fetched %d hourly records (tz=%s, offset=%dh)",
+        len(result), tz_offset, offset_hours,
+    )
     return result
 
 
