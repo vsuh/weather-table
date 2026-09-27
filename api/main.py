@@ -1,8 +1,13 @@
 """FastAPI приложение — REST API + веб-дашборд."""
 
 import logging
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
+
+# Добавляем корень проекта в sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response

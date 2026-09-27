@@ -2,6 +2,12 @@
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
+
+# Добавляем корень проекта в sys.path, чтобы импортировать модули верхнего уровня
+# (logging_utils, config) при запуске из collector/main.py
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from logging_utils import setup_logging
 
