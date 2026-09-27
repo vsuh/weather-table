@@ -1,7 +1,7 @@
-"""Получение почасовой уличной погоды от Open-Meteo.
+"""Получение почасовой уличной погоды от WeatherAPI.com.
 
-Open-Meteo — бесплатный API без ключа: https://open-meteo.com/
-Запрашиваем почасовые temperature_2m и relative_humidity_2m.
+WeatherAPI.com — бесплатный план: 1000 запросов/день.
+API: http://api.weatherapi.com/v1/forecast.json?key=KEY&q=LAT,LON&hours=N
 """
 
 import logging
@@ -25,16 +25,17 @@ def fetch_hourly_weather(
         Список dict: {'time': datetime (UTC), 'temperature': float, 'humidity': float}.
         Пустой список при ошибке.
     """
+    if not config.WEATHER_API_KEY:
+        logger.warning("WEATHER_API_KEY is not set, skipping weather fetch")
+        return []
+
     lat = config.WEATHER_LAT if lat is None else lat
     lon = config.WEATHER_LON if lon is None else lon
 
     params = {
-        "latitude": lat,
-        "longitude": lon,
-        "hourly": "temperature_2m,relative_humidity_2m",
-        "timezone": "UTC",
-        "past_days": 1,
-        "forecast_days": 2,
+        "key": config.WEATHER_API_KEY,
+        "q": f"{lat},{lon}",
+        "hours": 72,  # 72 часа прогноза — максимум на free tier
     }
 
     try:
@@ -42,27 +43,37 @@ def fetch_hourly_weather(
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        logger.error("Open-Meteo request failed: %s", e)
+        logger.error("WeatherAPI.com request failed: %s", e)
         return []
 
-    hourly = data.get("hourly", {})
-    times = hourly.get("time", [])
-    temps = hourly.get("temperature_2m", [])
-    hums = hourly.get("relative_humidity_2m", [])
+    # Проверка на ошибку от API (неверный ключ и т.д.)
+    error = data.get("error")
+    if error:
+        logger.error("WeatherAPI.com error: %s", error.get("message"))
+        return []
+
+    forecastdays = data.get("forecast", {}).get("forecastday", [])
+    if not forecastdays:
+        logger.warning("WeatherAPI.com returned no forecast data")
+        return []
 
     result: list[dict] = []
-    for i, t in enumerate(times):
-        try:
-            dt = datetime.fromisoformat(t).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-        result.append({
-            "time": dt,
-            "temperature": temps[i] if i < len(temps) else None,
-            "humidity": hums[i] if i < len(hums) else None,
-        })
+    for day in forecastdays:
+        for hour_entry in day.get("hour", []):
+            time_str = hour_entry.get("time")
+            if not time_str:
+                continue
+            try:
+                dt = datetime.fromisoformat(time_str).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            result.append({
+                "time": dt,
+                "temperature": hour_entry.get("temp_c"),
+                "humidity": hour_entry.get("humidity"),
+            })
 
-    logger.info("Open-Meteo: fetched %d hourly records", len(result))
+    logger.info("WeatherAPI.com: fetched %d hourly records", len(result))
     return result
 
 
@@ -71,33 +82,43 @@ def fetch_current_weather(
     lon: float | None = None,
 ) -> Optional[dict]:
     """Возвращает текущую погоду одним значением."""
+    if not config.WEATHER_API_KEY:
+        return None
+
     lat = config.WEATHER_LAT if lat is None else lat
     lon = config.WEATHER_LON if lon is None else lon
 
     params = {
-        "latitude": lat,
-        "longitude": lon,
-        "current": "temperature_2m,relative_humidity_2m",
-        "timezone": "UTC",
+        "key": config.WEATHER_API_KEY,
+        "q": f"{lat},{lon}",
     }
 
     try:
-        resp = requests.get(config.WEATHER_API_URL, params=params, timeout=20)
+        resp = requests.get("http://api.weatherapi.com/v1/current.json",
+                            params=params, timeout=20)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        logger.error("Open-Meteo request failed: %s", e)
+        logger.error("WeatherAPI.com current request failed: %s", e)
+        return None
+
+    error = data.get("error")
+    if error:
+        logger.error("WeatherAPI.com error: %s", error.get("message"))
         return None
 
     current = data.get("current", {})
-    t = current.get("time")
+    location = data.get("location", {})
+    time_str = current.get("last_updated")
+
     try:
-        dt = datetime.fromisoformat(t).replace(tzinfo=timezone.utc) if t else None
+        dt = datetime.fromisoformat(time_str).replace(tzinfo=timezone.utc) if time_str else None
     except ValueError:
         dt = None
 
     return {
         "time": dt,
-        "temperature": current.get("temperature_2m"),
-        "humidity": current.get("relative_humidity_2m"),
+        "temperature": current.get("temp_c"),
+        "humidity": current.get("humidity"),
+        "location": location.get("name"),
     }

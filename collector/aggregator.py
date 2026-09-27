@@ -10,8 +10,9 @@
   5. Окно сбрасывается.
 
 Для погодных датчиков (source=weather):
-  - Раз в WEATHER_POLL_SECONDS берём почасовые данные Open-Meteo
+  - Раз в WEATHER_POLL_SECONDS берём почасовые данные WeatherAPI.com
     и пишем каждое часовое значение отдельной записью (upsert по времени).
+  - Circuit-breaker с exponential backoff при сбоях.
 """
 
 import asyncio
@@ -192,7 +193,7 @@ def _parse_payload(protocol: str, service_uuid: str, raw_data: bytes) -> Optiona
 # ============================================================
 
 def ingest_weather(sensor: SensorConfig) -> int:
-    """Записывает почасовые данные Open-Meteo как показания датчика.
+    """Записывает почасовые данные WeatherAPI.com как показания датчика.
 
     Дедупликация: пропускаем часы, для которых уже есть запись.
 

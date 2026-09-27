@@ -20,14 +20,17 @@ BTHOME_SERVICE_UUID: str = "0000181c-0000-1000-8000-00805f9b34fb"
 # UUID чарактеристики BTHome (GATT)
 BTHOME_CHAR_UUID: str = "00002a2f-0000-1000-8000-00805f9b34fb"
 
-# --- Weather provider (Open-Meteo) ---
+# --- Weather provider ---
 # Координаты локации для уличной погоды (задаются в .env)
 WEATHER_LAT: float = float(os.getenv("WEATHER_LAT", "55.7558"))
 WEATHER_LON: float = float(os.getenv("WEATHER_LON", "37.6173"))
 WEATHER_TIMEZONE: str = os.getenv("WEATHER_TIMEZONE", "Europe/Moscow")
-# Как часто обновлять прогноз (сек). Open-Meteo — почасовые данные.
+# Как часто обновлять прогноз (сек).
 WEATHER_POLL_SECONDS: int = int(os.getenv("WEATHER_POLL_SECONDS", "3600"))
-WEATHER_API_URL: str = "https://api.open-meteo.com/v1/forecast"
+# WeatherAPI.com (бесплатный: 1000 запросов/день).
+# Ключ получить на https://www.weatherapi.com/
+WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")
+WEATHER_API_URL: str = "http://api.weatherapi.com/v1/forecast.json"
 # Circuit-breaker: макс. время ожидания при сбоях (сек).
 # После N последовательных ошибок интервал увеличивается экспоненциально.
 WEATHER_MAX_BACKOFF_SECONDS: int = int(os.getenv("WEATHER_MAX_BACKOFF_SECONDS", "3600"))

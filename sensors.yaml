@@ -6,7 +6,7 @@
 #   location — место установки (комната, подвал, улица)
 #   source   — тип источника:
 #                ble     — BLE-датчик (нужен mac и protocol)
-#                weather — внешний погодный провайдер (Open-Meteo)
+#                weather — внешний погодный провайдер (WeatherAPI.com)
 #   mac      — MAC-адрес (только для source: ble)
 #   protocol — формат данных: atc | bthome (только для source: ble)
 
@@ -25,9 +25,8 @@ sensors:
     mac: "A4:C1:38:3D:B6:AF"
     protocol: atc
 
-  # Уличная погода от Open-Meteo (координаты в .env).
-  # Отключено — API недоступен из сети.
-  # - id: outdoor
-  #   name: Улица (Open-Meteo)
-  #   location: outdoor
-  #   source: weather
+  # Уличная погода от WeatherAPI.com (ключ в .env: WEATHER_API_KEY).
+  - id: outdoor
+    name: Улица (WeatherAPI)
+    location: outdoor
+    source: weather
