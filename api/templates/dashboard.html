@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather Table — Датчики температуры и влажности</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card-bg: #1a1d2e;
+            --text: #e0e0e0;
+            --text-muted: #888;
+            --accent-temp: #ff6b6b;
+            --accent-hum: #4ecdc4;
+            --accent-bat: #45b7d1;
+            --border: #2a2d3e;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg); color: var(--text);
+            padding: 24px; min-height: 100vh;
+        }
+        h1 { text-align: center; font-size: 1.5rem; font-weight: 600;
+             margin-bottom: 24px; color: #fff; }
+
+        /* Sensor cards */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px; margin-bottom: 24px;
+        }
+        .sensor-card {
+            background: var(--card-bg); border: 1px solid var(--border);
+            border-radius: 12px; padding: 18px; cursor: pointer;
+            transition: border-color 0.2s, transform 0.1s;
+        }
+        .sensor-card:hover { transform: translateY(-2px); }
+        .sensor-card.active { border-color: var(--accent-hum); }
+        .sensor-card .head {
+            display: flex; justify-content: space-between; align-items: baseline;
+            margin-bottom: 10px;
+        }
+        .sensor-card .name { font-weight: 600; font-size: 1rem; }
+        .sensor-card .src {
+            font-size: 0.65rem; text-transform: uppercase; letter-spacing: .5px;
+            color: var(--text-muted); border: 1px solid var(--border);
+            padding: 1px 6px; border-radius: 6px;
+        }
+        .sensor-card .metrics { display: flex; gap: 18px; }
+        .sensor-card .m .v { font-size: 1.5rem; font-weight: 700; }
+        .sensor-card .m .l { font-size: 0.7rem; color: var(--text-muted); }
+        .sensor-card .t .v { color: var(--accent-temp); }
+        .sensor-card .h .v { color: var(--accent-hum); }
+        .sensor-card .sub { font-size: 0.7rem; color: var(--text-muted);
+                            margin-top: 10px; }
+
+        /* Controls */
+        .controls { display: flex; justify-content: center; gap: 8px;
+                    margin-bottom: 16px; flex-wrap: wrap; }
+        .controls button {
+            background: var(--card-bg); border: 1px solid var(--border);
+            color: var(--text); padding: 8px 16px; border-radius: 8px;
+            cursor: pointer; font-size: 0.85rem;
+        }
+        .controls button:hover { border-color: var(--accent-hum); }
+        .controls button.active {
+            background: var(--accent-hum); color: #000;
+            border-color: var(--accent-hum); font-weight: 600;
+        }
+
+        .chart-container {
+            background: var(--card-bg); border: 1px solid var(--border);
+            border-radius: 12px; padding: 20px; margin-bottom: 24px;
+            height: 420px;
+        }
+        .last-update { text-align: center; font-size: 0.75rem;
+                       color: var(--text-muted); margin-top: 12px; }
+    </style>
+</head>
+<body>
+    <h1>🌡️ Weather Table</h1>
+
+    <div class="stats" id="sensor-cards"></div>
+
+    <div class="controls">
+        <button data-hours="1" onclick="setHours(1, this)">1ч</button>
+        <button data-hours="6" onclick="setHours(6, this)">6ч</button>
+        <button data-hours="24" class="active" onclick="setHours(24, this)">24ч</button>
+        <button data-hours="168" onclick="setHours(168, this)">7д</button>
+        <button data-hours="720" onclick="setHours(720, this)">30д</button>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="mainChart"></canvas>
+    </div>
+
+    <div class="last-update" id="last-update"></div>
+
+    <script>
+        let chart = null;
+        let currentHours = 24;
+        // «Все датчики» или конкретный sensor_id
+        let selectedSensor = null;   // null = все
+
+        // Палитра для датчиков
+        const COLORS = [
+            '#ff6b6b', '#4ecdc4', '#45b7d1', '#f7b731',
+            '#a55eea', '#26de81', '#fc5c65', '#2bcbba',
+        ];
+
+        async function loadSensors() {
+            const res = await fetch('/api/sensors');
+            const sensors = await res.json();
+
+            const latest = {};
+            await Promise.all(sensors.map(async (s) => {
+                const r = await fetch(`/api/readings/latest?sensor_id=${s.id}`);
+                const j = await r.json();
+                if (!j.error) latest[s.id] = j;
+            }));
+
+            const container = document.getElementById('sensor-cards');
+            container.innerHTML = '';
+
+            // Карточка «Все датчики»
+            const allCard = document.createElement('div');
+            allCard.className = 'sensor-card all' + (selectedSensor === null ? ' active' : '');
+            allCard.onclick = () => selectSensor(null);
+            allCard.innerHTML = `
+                <div class="head">
+                    <span class="name">Все датчики</span>
+                    <span class="src">overview</span>
+                </div>
+                <div class="sub">Показать все серии на графике</div>`;
+            container.appendChild(allCard);
+
+            sensors.forEach((s, i) => {
+                const d = latest[s.id] || {};
+                const card = document.createElement('div');
+                card.className = 'sensor-card' + (selectedSensor === s.id ? ' active' : '');
+                card.onclick = () => selectSensor(s.id);
+                const t = d.temperature != null ? d.temperature.toFixed(1) + '°C' : '—';
+                const h = d.humidity != null ? d.humidity.toFixed(1) + '%' : '—';
+                const sub = d.recorded_at
+                    ? new Date(d.recorded_at).toLocaleString('ru-RU') : 'нет данных';
+                const bat = d.battery != null ? ` · 🔋 ${d.battery}%` : '';
+                card.innerHTML = `
+                    <div class="head">
+                        <span class="name">${s.name}</span>
+                        <span class="src">${s.source}</span>
+                    </div>
+                    <div class="metrics">
+                        <div class="m t"><div class="v">${t}</div><div class="l">темп.</div></div>
+                        <div class="m h"><div class="v">${h}</div><div class="l">влажн.</div></div>
+                    </div>
+                    <div class="sub">${sub}${bat}</div>`;
+                container.appendChild(card);
+            });
+        }
+
+        function selectSensor(id) {
+            selectedSensor = id;
+            document.querySelectorAll('.sensor-card').forEach(c => c.classList.remove('active'));
+            loadSensors();
+            loadChart();
+        }
+
+        async function loadChart() {
+            const url = `/api/readings/time-series?hours=${currentHours}&all_sensors=true`;
+            const res = await fetch(url);
+            const data = await res.json();
+
+            const datasets = [];
+            let colorIdx = 0;
+
+            for (const [sid, series] of Object.entries(data)) {
+                if (selectedSensor !== null && sid !== selectedSensor) continue;
+                if (!series.timestamps.length) continue;
+
+                const tempColor = selectedSensor ? '#ff6b6b' : COLORS[colorIdx % COLORS.length];
+                const humColor = selectedSensor ? '#4ecdc4' : COLORS[(colorIdx + 4) % COLORS.length];
+                colorIdx++;
+
+                const showHum = selectedSensor !== null; // влажность только для одного
+
+                datasets.push({
+                    label: `${series.name} — темп.`,
+                    data: series.timestamps.map((t, i) => ({ x: t, y: series.temperatures[i] })),
+                    borderColor: tempColor,
+                    backgroundColor: tempColor + '22',
+                    borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'y',
+                });
+                if (showHum) {
+                    datasets.push({
+                        label: `${series.name} — влажн.`,
+                        data: series.timestamps.map((t, i) => ({ x: t, y: series.humidities[i] })),
+                        borderColor: humColor,
+                        backgroundColor: humColor + '22',
+                        borderWidth: 2, pointRadius: 0, tension: 0.3,
+                        yAxisID: 'y1', borderDash: [5, 4],
+                    });
+                }
+            }
+
+            renderChart(datasets);
+        }
+
+        function renderChart(datasets) {
+            const ctx = document.getElementById('mainChart').getContext('2d');
+            if (chart) {
+                chart.data.datasets = datasets;
+                chart.update();
+                return;
+            }
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { labels: { color: '#e0e0e0', boxWidth: 12 } } },
+                    scales: {
+                        x: { type: 'time', time: { tooltipFormat: 'dd.MM HH:mm' },
+                             grid: { color: 'rgba(255,255,255,0.05)' },
+                             ticks: { color: '#888' } },
+                        y: { type: 'linear', position: 'left',
+                             title: { display: true, text: 'Температура (°C)', color: '#ff6b6b' },
+                             grid: { color: 'rgba(255,255,255,0.05)' },
+                             ticks: { color: '#ff6b6b' } },
+                        y1: { type: 'linear', position: 'right',
+                              title: { display: true, text: 'Влажность (%)', color: '#4ecdc4' },
+                              grid: { drawOnChartArea: false },
+                              ticks: { color: '#4ecdc4' } },
+                    },
+                },
+            });
+        }
+
+        function setHours(hours, btn) {
+            currentHours = hours;
+            document.querySelectorAll('.controls button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            loadChart();
+        }
+
+        async function refresh() {
+            await loadSensors();
+            await loadChart();
+            document.getElementById('last-update').textContent =
+                'Обновлено: ' + new Date().toLocaleTimeString('ru-RU');
+        }
+
+        refresh();
+        setInterval(refresh, 60000);
+    </script>
+</body>
+</html>

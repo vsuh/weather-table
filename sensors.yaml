@@ -1,0 +1,34 @@
+# Список датчиков weather-table.
+#
+# Каждый датчик:
+#   id       — уникальный идентификатор (используется в БД и API)
+#   name     — человекочитаемое имя
+#   location — место установки (комната, подвал, улица)
+#   source   — тип источника:
+#                ble     — BLE-датчик (нужен mac и protocol)
+#                weather — внешний погодный провайдер (Open-Meteo)
+#   mac      — MAC-адрес (только для source: ble)
+#   protocol — формат данных: atc | bthome (только для source: ble)
+
+sensors:
+  - id: living_room
+    name: Комната
+    location: living_room
+    source: ble
+    mac: "A4:C1:38:20:64:92"
+    protocol: atc
+
+  # Пример: датчик в подвале.
+  # Раскомментируйте и укажите реальный MAC после прошивки датчика.
+  # - id: basement
+  #   name: Подвал
+  #   location: basement
+  #   source: ble
+  #   mac: "XX:XX:XX:XX:XX:XX"
+  #   protocol: atc
+
+  # Уличная погода от Open-Meteo (координаты в .env).
+  - id: outdoor
+    name: Улица (Open-Meteo)
+    location: outdoor
+    source: weather
