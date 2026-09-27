@@ -30,7 +30,7 @@ WEATHER_POLL_SECONDS: int = int(os.getenv("WEATHER_POLL_SECONDS", "3600"))
 # WeatherAPI.com (бесплатный: 1000 запросов/день).
 # Ключ получить на https://www.weatherapi.com/
 WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")
-WEATHER_API_URL: str = "http://api.weatherapi.com/v1/forecast.json"
+WEATHER_API_URL: str = "https://api.weatherapi.com/v1/forecast.json"
 # Circuit-breaker: макс. время ожидания при сбоях (сек).
 # После N последовательных ошибок интервал увеличивается экспоненциально.
 WEATHER_MAX_BACKOFF_SECONDS: int = int(os.getenv("WEATHER_MAX_BACKOFF_SECONDS", "3600"))
