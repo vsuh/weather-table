@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=/home/ubuntu/weather-table
-Environment=PATH=/home/ubuntu/weather-table/.venv/bin
-ExecStart=/home/ubuntu/weather-table/.venv/bin/python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+User=vsuh
+Group=vsuh
+WorkingDirectory=/opt/weather-table
+Environment=PATH=/opt/weather-table/.venv/bin
+ExecStart=/opt/weather-table/.venv/bin/python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
 StandardOutput=journal
