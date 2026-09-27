@@ -26,7 +26,8 @@ sensors:
     protocol: atc
 
   # Уличная погода от Open-Meteo (координаты в .env).
-  - id: outdoor
-    name: Улица (Open-Meteo)
-    location: outdoor
-    source: weather
+  # Отключено — API недоступен из сети.
+  # - id: outdoor
+  #   name: Улица (Open-Meteo)
+  #   location: outdoor
+  #   source: weather

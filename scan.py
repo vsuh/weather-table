@@ -101,7 +101,7 @@ def format_packet(mac: str, rssi: int, raw: bytes, service_uuid: str) -> str:
     lines.append(f"  MAC:     {mac}")
     lines.append(f"  RSSI:    {rssi} dBm")
     lines.append(f"  Service: {service_uuid}")
-    lines.append(f"  Время:   {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    lines.append(f"  Время:   {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
     lines.append(f"{'='*60}")
 
     lines.append(f"\nСырые байты ({len(raw)} байт):")

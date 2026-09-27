@@ -234,18 +234,69 @@ def ingest_weather(sensor: SensorConfig) -> int:
 
 
 async def _weather_loop(registry: SensorRegistry) -> None:
-    """Периодически подтягивает уличную погоду."""
+    """Периодически подтягивает уличную погоду.
+
+    Circuit-breaker с exponential backoff:
+      - При успешном запросе — сброс интервала до WEATHER_POLL_SECONDS
+      - При ошибке — увеличение интервала в WEATHER_BACKOFF_MULTIPLIER раз
+        (до WEATHER_MAX_BACKOFF_SECONDS)
+      - Никогда не падает: все исключения перехватываются
+    """
     weather_sensors = registry.weather_sensors
     if not weather_sensors:
         return
 
+    # Конsecutive failures per sensor → определяет текущий backoff
+    failures: dict[str, int] = {s.id: 0 for s in weather_sensors}
+
     while True:
-        for sensor in weather_sensors:
-            try:
-                ingest_weather(sensor)
-            except Exception:
-                logger.exception("[%s] Weather ingest failed", sensor.id)
-        await asyncio.sleep(config.WEATHER_POLL_SECONDS)
+        try:
+            any_success = False
+            for sensor in weather_sensors:
+                try:
+                    n = ingest_weather(sensor)
+                    if n > 0:
+                        logger.info("[%s] Weather: %d new records", sensor.id, n)
+                        failures[sensor.id] = 0  # сброс backoff
+                        any_success = True
+                    else:
+                        # Нет новых записей — не считаем за ошибку
+                        pass
+                except Exception:
+                    failures[sensor.id] = failures.get(sensor.id, 0) + 1
+                    logger.warning(
+                        "[%s] Weather ingest failed (failures=%d): %s",
+                        sensor.id, failures[sensor.id],
+                    )
+
+            # Вычисляем следующий интервал
+            if any_success:
+                sleep_time = config.WEATHER_POLL_SECONDS
+            else:
+                # Берём макс. backoff среди всех weather-сенсоров
+                max_fail = max(failures.values()) if failures else 0
+                if max_fail > 0:
+                    sleep_time = min(
+                        config.WEATHER_BACKOFF_BASE_SECONDS
+                        * (config.WEATHER_BACKOFF_MULTIPLIER ** (max_fail - 1)),
+                        config.WEATHER_MAX_BACKOFF_SECONDS,
+                    )
+                    logger.info(
+                        "Weather unavailable — next check in %ds (backoff level %d)",
+                        sleep_time, max_fail,
+                    )
+                else:
+                    sleep_time = config.WEATHER_POLL_SECONDS
+
+            await asyncio.sleep(sleep_time)
+
+        except asyncio.CancelledError:
+            logger.info("Weather loop cancelled")
+            raise
+        except Exception:
+            # Гарантируем, что weather-loop никогда не убьёт коллектор
+            logger.exception("Weather loop unexpected error, continuing...")
+            await asyncio.sleep(config.WEATHER_POLL_SECONDS)
 
 
 async def _flush_loop(manager: AggregatorManager) -> None:
