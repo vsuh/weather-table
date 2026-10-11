@@ -10,8 +10,9 @@
   5. Окно сбрасывается.
 
 Для погодных датчиков (source=weather):
-  - Раз в WEATHER_POLL_SECONDS берём почасовые наблюдения (Open-Meteo,
-    запасной — WeatherAPI.com) и пишем каждый наступивший час отдельной
+  - Раз в WEATHER_POLL_SECONDS берём почасовые наблюдения (основной провайдер задаёт
+    WEATHER_PROVIDER: wttr.in, MET Norway, Open-Meteo или WeatherAPI.com;
+    остальные — запасные) и пишем каждый наступивший час отдельной
     записью (upsert по времени). Прогноз на будущие часы не сохраняется.
   - Circuit-breaker с exponential backoff при сбоях.
 """

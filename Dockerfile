@@ -2,6 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Логи сразу в stdout без буфера, без .pyc
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 # Системные зависимости для bleak (libbluetooth)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libbluetooth-dev \

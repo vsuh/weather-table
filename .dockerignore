@@ -1,0 +1,25 @@
+# Не копировать в образ: секреты, данные, виртуальное окружение, служебное.
+.git
+.gitignore
+.gigacode_vsc
+.venv
+__pycache__/
+*.pyc
+
+# секреты и данные (передаются через env_file и volume)
+.env
+data/
+*.db
+*.db-*
+*.bak*
+
+# не нужно внутри контейнера
+graphify-out/
+grafana/
+prometheus.yml
+docker-compose.yml
+Dockerfile
+.dockerignore
+systemd/
+README.md
+task.md

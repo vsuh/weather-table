@@ -1,27 +1,53 @@
-version: "3.8"
+# Weather Table: коллектор + API/дашборд + Prometheus + Grafana.
+#
+# Запуск:  docker compose up -d --build
+# Дашборд: http://<хост>:8000/   Grafana: http://<хост>:3000   Prometheus: http://<хост>:9090
+#
+# Настройки и секреты — в файле .env рядом с этим файлом (в образ он не копируется,
+# см. .dockerignore). Обязательно задайте GF_ADMIN_PASSWORD (пароль администратора Grafana).
+#
+# ВНИМАНИЕ: не запускайте этот стек одновременно с systemd-сервисами
+# weather-collector / weather-api: будет конфликт порта 8000 и BLE-адаптера.
 
 services:
-  # --- Weather collector (BLE + DB) ---
+  # --- Weather collector (BLE + погода + запись в БД) ---
   weather-collector:
     build: .
     command: python collector/main.py
     restart: unless-stopped
+    env_file: .env
     volumes:
       - ./data:/app/data
-    # BLE device on Linux host
+      - ./sensors.yaml:/app/sensors.yaml:ro
+      # bleak общается с BlueZ хоста через D-Bus; без сокета BLE в контейнере не работает
+      - /var/run/dbus:/var/run/dbus
+    # BLE-адаптер хоста (Linux)
     network_mode: host
 
   # --- Weather API + dashboard ---
   weather-api:
     build: .
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
+    env_file: .env
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+      - ./sensors.yaml:/app/sensors.yaml:ro
     depends_on:
       - weather-collector
+    healthcheck:
+      # /health отвечает 503, если данные датчиков устарели — контейнер станет unhealthy
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # --- Prometheus ---
   prometheus:
@@ -48,7 +74,7 @@ services:
       - ./grafana/dashboard.json:/etc/grafana/provisioning/dashboards/dashboard.json:ro
       - grafana-data:/var/lib/grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:?задайте GF_ADMIN_PASSWORD в .env}
     depends_on:
       - prometheus
 

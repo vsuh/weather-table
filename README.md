@@ -124,6 +124,25 @@ curl "http://localhost:8000/api/readings/hourly?hours=24&sensor_id=living_room"
 
 Время в БД хранится в UTC без указания пояса, в ответах API все моменты времени отдаются в UTC с суффиксом `Z` (браузер переводит их в местное время). Каждая запись BLE — среднее за окно агрегации (`packets_count` измерений). Почасовая выборка `/api/readings/hourly` группирует записи по часам UTC [HH:00, HH:59]; последний (текущий) час может быть неполным, число записей в каждом часе отдаётся в `readings`. Записи из будущего (`recorded_at` позже текущего момента) во всех выборках игнорируются. Дашборд переключает разрешение графика: «Авто» (почасовая выборка начиная с 7 дней), «По окнам», «По часам».
 
+## Мониторинг (Prometheus / Grafana)
+
+`/metrics` (процесс API) собирает метрики из БД при каждом запросе; записи из будущего не учитываются:
+
+| Метрика | Метки | Описание |
+|---|---|---|
+| `weather_temperature_celsius` | `sensor_id`, `source`, `location` | Последняя температура |
+| `weather_humidity_percent` | `sensor_id`, `source`, `location` | Последняя влажность |
+| `weather_battery_percent`, `weather_battery_millivolts` | `sensor_id`, `source` | Батарея BLE-датчика |
+| `weather_readings_latest_age_s` | `sensor_id`, `source` | Возраст последнего показания (сек) |
+| `weather_readings_last_hour` | `sensor_id`, `source` | Записей за последний час (BLE — около 20, погода — 1) |
+| `weather_readings_count` | `sensor_id`, `source` | Всего записей в БД |
+| `weather_sensors_total` | `source` | Число активных датчиков |
+| `weather_db_up` | — | 1, если БД доступна |
+
+Счётчики коллектора (`weather_readings_total`, `weather_aggregation_packets`, `weather_aggregation_duplicates`) живут в процессе коллектора и в `/metrics` API не попадают (публикация отдельным портом — в планах).
+
+Дашборд Grafana «Weather Table» (`grafana/dashboard.json`, подключается автоматически): температура и влажность сейчас и на графиках, батарея (% и мВ), возраст показаний BLE и погоды, записей за час, число датчиков, доступность БД. Точки на графиках — «последнее известное значение» на момент опроса Prometheus (раз в 15 с), то есть значения меняются ступеньками (BLE — раз в окно агрегации, погода — раз в час).
+
 ## Деплой на HELOR (Ubuntu 24.04)
 
 Рабочая копия — `/opt/weather-table`, сервис запускается из неё (`WorkingDirectory=/opt/weather-table`, интерпретатор `/opt/weather-table/.venv/bin/python`). БД: `/opt/weather-table/data/weather.db`.
@@ -150,7 +169,12 @@ curl http://localhost:8000/health
 
 ### Docker (опционально)
 
-`docker-compose.yml` поднимает коллектор, API, Prometheus и Grafana (`docker-compose up -d`, Grafana — порт 3000, Prometheus — 9090). Коллектор запущен с `network_mode: host`, но для BLE внутри контейнера обычно требуется ещё доступ к D-Bus BlueZ (сокет `/var/run/dbus`), в compose он пока не проброшен — поэтому на HELOR коллектор запускается через systemd.
+`docker-compose.yml` поднимает коллектор, API, Prometheus и Grafana: `docker compose up -d --build`. Дашборд — `:8000`, Grafana — `:3000` (логин `admin`, пароль из `GF_ADMIN_PASSWORD` в `.env`, без него compose не стартует), Prometheus — `:9090`.
+
+- Настройки и секреты читаются из `.env` (`env_file`); в образ файл `.env`, база `data/`, `.git` и `.venv` не попадают (`.dockerignore`). `sensors.yaml` пробрасывается в контейнеры томом, пересборка при его правке не нужна.
+- Для BLE коллектор запускается с `network_mode: host` и с проброшенным сокетом D-Bus (`/var/run/dbus`): `bleak` разговаривает с BlueZ хоста, поэтому на хосте должен работать `bluetooth.service`. Проверено только по конфигурации, запуск на HELOR не выполнялся (там работает systemd).
+- API запускается без `--reload`, у него есть healthcheck по `/health` (503 при устаревших данных — контейнер станет `unhealthy`).
+- Не запускайте Docker-стек одновременно с systemd-сервисами (порт 8000 и BLE-адаптер).
 
 ## Структура проекта
 
@@ -172,13 +196,13 @@ weather-table/
 │   ├── health.py          # оценка свежести данных
 │   ├── metrics.py         # метрики Prometheus
 │   └── templates/dashboard.html
-├── grafana/, prometheus.yml, docker-compose.yml, Dockerfile
+├── grafana/, prometheus.yml, docker-compose.yml, Dockerfile, .dockerignore
 ├── systemd/               # unit-файлы
 ├── sensors.yaml           # список датчиков
 ├── config.py, logging_utils.py
 ├── scan.py                # диагностика BLE
 ├── p.py                   # разбор сырого пакета
-├── test_aggregator.py, test_weather.py, test_hourly.py
+├── test_aggregator.py, test_weather.py, test_hourly.py, test_metrics.py
 └── task.md                # описание задачи и журнал
 ```
 
