@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, literal_column, select
 
 from storage.database import get_session, init_db, sync_sensors
 from storage.models import Reading, Sensor
@@ -47,6 +47,24 @@ def startup():
     logger.info("API server started")
 
 
+def _now_naive() -> datetime:
+    """Текущее время UTC без tzinfo — так в SQLite хранится recorded_at."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _iso_utc(dt: Optional[datetime]) -> Optional[str]:
+    """ISO-строка UTC с суффиксом Z: браузер корректно переводит её в местное время.
+
+    Без Z строку вида '2026-10-10T21:00:00' JS считает местным временем,
+    и графики смещаются на разницу с UTC (для Москвы — 3 часа).
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.isoformat(timespec="seconds") + "Z"
+
+
 def _serialize_reading(r: Reading) -> dict:
     return {
         "id": r.id,
@@ -57,7 +75,7 @@ def _serialize_reading(r: Reading) -> dict:
         "battery_mv": r.battery_mv,
         "battery": r.battery,
         "packets_count": r.packets_count,
-        "recorded_at": r.recorded_at.isoformat() if r.recorded_at else None,
+        "recorded_at": _iso_utc(r.recorded_at),
     }
 
 
@@ -109,7 +127,7 @@ def latest_reading(
 ):
     """Самое свежее показание (опционально по датчику)."""
     with get_session() as session:
-        q = session.query(Reading)
+        q = session.query(Reading).filter(Reading.recorded_at <= _now_naive())
         if sensor_id:
             q = q.filter(Reading.sensor_id == sensor_id)
         row = q.order_by(Reading.recorded_at.desc()).first()
@@ -168,7 +186,8 @@ def time_series(
       { sensor_id: {name, timestamps[], temperatures[], humidities[]} }
     Иначе — плоскую серию по sensor_id (или все вместе).
     """
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
+    now = _now_naive()
+    cutoff = now - timedelta(hours=hours)
 
     with get_session() as session:
         if all_sensors:
@@ -184,6 +203,7 @@ def time_series(
                     select(Reading.recorded_at, Reading.temperature, Reading.humidity)
                     .where(Reading.sensor_id == s.id)
                     .where(Reading.recorded_at >= cutoff)
+                    .where(Reading.recorded_at <= now)
                     .order_by(Reading.recorded_at)
                 )
                 rows = session.execute(stmt).all()
@@ -191,7 +211,7 @@ def time_series(
                     "name": s.name,
                     "location": s.location,
                     "source": s.source,
-                    "timestamps": [r[0].isoformat() for r in rows],
+                    "timestamps": [_iso_utc(r[0]) for r in rows],
                     "temperatures": [r[1] for r in rows],
                     "humidities": [r[2] for r in rows],
                 }
@@ -200,6 +220,7 @@ def time_series(
         stmt = (
             select(Reading.recorded_at, Reading.temperature, Reading.humidity)
             .where(Reading.recorded_at >= cutoff)
+            .where(Reading.recorded_at <= now)
             .order_by(Reading.recorded_at)
         )
         if sensor_id:
@@ -207,9 +228,105 @@ def time_series(
         rows = session.execute(stmt).all()
         return {
             "sensor_id": sensor_id,
-            "timestamps": [r[0].isoformat() for r in rows],
+            "timestamps": [_iso_utc(r[0]) for r in rows],
             "temperatures": [r[1] for r in rows],
             "humidities": [r[2] for r in rows],
+        }
+
+
+# ---------- Hourly aggregation ----------
+
+# Час в UTC как строка ISO с Z. literal_column — чтобы выражения в SELECT и GROUP BY
+# совпадали буквально (без разных bind-параметров).
+_HOUR_EXPR = func.strftime(literal_column("'%Y-%m-%dT%H:00:00Z'"), Reading.recorded_at)
+
+
+def _r2(v) -> Optional[float]:
+    return round(float(v), 2) if v is not None else None
+
+
+def _hourly_series(session, sensor_id: str, cutoff: datetime, now: datetime) -> dict:
+    """Почасовая свёртка показаний одного датчика (UTC).
+
+    Среднее — обычное среднее по записям часа (каждая запись — уже среднее
+    по 5–9 BLE-пакетам, разница весов незначительна). Будущие записи
+    (recorded_at > now) не учитываются.
+    """
+    rows = session.execute(
+        select(
+            _HOUR_EXPR,
+            func.avg(Reading.temperature),
+            func.min(Reading.temperature),
+            func.max(Reading.temperature),
+            func.avg(Reading.humidity),
+            func.min(Reading.humidity),
+            func.max(Reading.humidity),
+            func.count(Reading.id),
+            func.sum(Reading.packets_count),
+        )
+        .where(Reading.sensor_id == sensor_id)
+        .where(Reading.recorded_at >= cutoff)
+        .where(Reading.recorded_at <= now)
+        .group_by(_HOUR_EXPR)
+        .order_by(_HOUR_EXPR)
+    ).all()
+
+    return {
+        "timestamps": [r[0] for r in rows],
+        "temperatures": [_r2(r[1]) for r in rows],
+        "temp_min": [_r2(r[2]) for r in rows],
+        "temp_max": [_r2(r[3]) for r in rows],
+        "humidities": [_r2(r[4]) for r in rows],
+        "hum_min": [_r2(r[5]) for r in rows],
+        "hum_max": [_r2(r[6]) for r in rows],
+        "readings": [r[7] for r in rows],
+        "packets": [int(r[8] or 0) for r in rows],
+    }
+
+
+@app.get("/api/readings/hourly")
+def hourly(
+    hours: int = Query(24, ge=1, le=2160, description="Сколько часов (включая текущий, неполный час)"),
+    sensor_id: Optional[str] = Query(None, description="Датчик"),
+    all_sensors: bool = Query(False, description="Вернуть серии по всем активным датчикам"),
+):
+    """Почасовые средние температуры и влажности (min/avg/max), время — UTC.
+
+    Час — интервал [HH:00, HH:59]. Последний (текущий) час может быть неполным:
+    число записей в нём в массиве `readings`. Структура ответа похожа на
+    /api/readings/time-series: массивы timestamps, temperatures, humidities, а также
+    temp_min/temp_max, hum_min/hum_max, readings (записей в часе), packets (измерений).
+    """
+    if not all_sensors and not sensor_id:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Укажите sensor_id или all_sensors=true"},
+        )
+
+    now = _now_naive()
+    cutoff = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=hours - 1)
+
+    with get_session() as session:
+        if all_sensors:
+            sensors = (
+                session.query(Sensor)
+                .filter(Sensor.active.is_(True))
+                .order_by(Sensor.location)
+                .all()
+            )
+            return {
+                s.id: {
+                    "name": s.name,
+                    "location": s.location,
+                    "source": s.source,
+                    **_hourly_series(session, s.id, cutoff, now),
+                }
+                for s in sensors
+            }
+
+        return {
+            "sensor_id": sensor_id,
+            **_hourly_series(session, sensor_id, cutoff, now),
         }
 
 
@@ -220,6 +337,7 @@ def _last_reading_times() -> dict[str, Optional[datetime]]:
     with get_session() as session:
         rows = session.execute(
             select(Reading.sensor_id, func.max(Reading.recorded_at))
+            .where(Reading.recorded_at <= _now_naive())
             .group_by(Reading.sensor_id)
         ).all()
         return {sid: ts for sid, ts in rows}

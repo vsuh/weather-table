@@ -85,12 +85,18 @@
 
     <div class="stats" id="sensor-cards"></div>
 
-    <div class="controls">
+    <div class="controls" id="hours-controls">
         <button data-hours="1" onclick="setHours(1, this)">1ч</button>
         <button data-hours="6" onclick="setHours(6, this)">6ч</button>
         <button data-hours="24" class="active" onclick="setHours(24, this)">24ч</button>
         <button data-hours="168" onclick="setHours(168, this)">7д</button>
         <button data-hours="720" onclick="setHours(720, this)">30д</button>
+    </div>
+
+    <div class="controls" id="res-controls">
+        <button data-res="auto" class="active" onclick="setRes('auto', this)">Авто</button>
+        <button data-res="raw" onclick="setRes('raw', this)">По окнам</button>
+        <button data-res="hourly" onclick="setRes('hourly', this)">По часам</button>
     </div>
 
     <div class="chart-container">
@@ -102,6 +108,8 @@
     <script>
         let chart = null;
         let currentHours = 24;
+        // Разрешение графика: 'auto' (почасово от 7 дней), 'raw' (окна агрегации), 'hourly'
+        let resolution = 'auto';
         // «Все датчики» или конкретный sensor_id
         let selectedSensor = null;   // null = все
 
@@ -169,7 +177,12 @@
         }
 
         async function loadChart() {
-            const url = `/api/readings/time-series?hours=${currentHours}&all_sensors=true`;
+            const hourly = resolution === 'hourly' ||
+                (resolution === 'auto' && currentHours >= 168);
+            const url = hourly
+                ? `/api/readings/hourly?hours=${currentHours}&all_sensors=true`
+                : `/api/readings/time-series?hours=${currentHours}&all_sensors=true`;
+            const pr = hourly ? 3 : 0;   // точки на почасовом графике видны
             const res = await fetch(url);
             const data = await res.json();
 
@@ -191,7 +204,7 @@
                     data: series.timestamps.map((t, i) => ({ x: t, y: series.temperatures[i] })),
                     borderColor: tempColor,
                     backgroundColor: tempColor + '22',
-                    borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'y',
+                    borderWidth: 2, pointRadius: pr, tension: 0.3, yAxisID: 'y',
                 });
                 if (showHum) {
                     datasets.push({
@@ -199,7 +212,7 @@
                         data: series.timestamps.map((t, i) => ({ x: t, y: series.humidities[i] })),
                         borderColor: humColor,
                         backgroundColor: humColor + '22',
-                        borderWidth: 2, pointRadius: 0, tension: 0.3,
+                        borderWidth: 2, pointRadius: pr, tension: 0.3,
                         yAxisID: 'y1', borderDash: [5, 4],
                     });
                 }
@@ -241,7 +254,14 @@
 
         function setHours(hours, btn) {
             currentHours = hours;
-            document.querySelectorAll('.controls button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#hours-controls button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            loadChart();
+        }
+
+        function setRes(res, btn) {
+            resolution = res;
+            document.querySelectorAll('#res-controls button').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             loadChart();
         }

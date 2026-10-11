@@ -1,271 +1,263 @@
 ---
 project: Weather Table
 created: "2026-09-24"
+updated: "2026-10-11"
 related: "[[10-projects/index|index]]"
-title: График погоды в спальне (README)
+title: Weather Table — сбор температуры и влажности (README)
 ---
 # Weather Table
 
-Система сбора почасовых данных с BLE-датчика температуры и влажности Xiaomi LYWSD03MMC (ATC firmware) с хранением в SQLite и веб-дашбордом.
+Система сбора данных о температуре и влажности: несколько BLE-датчиков Xiaomi LYWSD03MMC (прошивка ATC/pvvx) плюс уличная погода из интернета. Данные усредняются, хранятся в SQLite и показываются в веб-дашборде (Chart.js) и Grafana.
 
 ## Архитектура
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│ BLE Sensor  │────▶│ Aggregator   │────▶│  SQLite DB   │
-│ (ATC fw)    │ BLE │ (dedup+avg)  │     │ weather.db   │
-└─────────────┘     └──────┬───────┘     └──────┬───────┘
-                           │                    │
-                           │                    ├──▶ FastAPI
-                           │                    │      ├── /api/...  (REST)
-                           │                    │      └── /         (dashboard)
-                           │                    │
-                           ▼                    ▼
-                      asyncio loop          Chart.js
-                      (continuous)          (real-time)
+┌──────────────┐  BLE   ┌──────────────────┐     ┌──────────────┐
+│ BLE-датчики  │───────▶│                  │     │              │      ┌─────────────┐
+│ living_room  │        │   Aggregator     │────▶│  SQLite DB   │─────▶│ FastAPI     │
+│ storage      │        │ (dedup + avg)    │     │  weather.db  │      │ /api, /     │
+└──────────────┘        │                  │     │              │      │ /health     │
+┌──────────────┐  HTTP  │  weather loop    │     │              │      │ /metrics    │
+│ Погода (wttr,│───────▶│ (раз в час,      │     └──────────────┘      └──────┬──────┘
+│ MET, ...)    │        │  только факт)    │                                  │
+└──────────────┘        └──────────────────┘                          Prometheus → Grafana
 ```
+
+Датчики описываются в `sensors.yaml`, один процесс-коллектор (`collector/main.py`) обслуживает все.
+
+## Датчики
+
+Список — в `sensors.yaml`:
+
+| id | Название | Источник | Адрес / провайдер |
+|---|---|---|---|
+| `living_room` | Комната | BLE (`atc`) | `A4:C1:38:20:64:92` |
+| `storage` | Кладовка | BLE (`atc`) | `A4:C1:38:3D:B6:AF` |
+| `outdoor` | Улица | weather | см. раздел «Уличная погода» |
+
+Оба BLE-датчика перепрошиты на **ATC_MiThermometer (pvvx)**, формат рассылки *pvvx custom* (UUID `0x181A`, без шифрования). После прошивки датчики видны под именами `ATC_206492` и `ATC_3DB6AF` (последние три байта MAC).
+
+Новый датчик: добавить запись в `sensors.yaml` и перезапустить коллектор (таблица `sensors` синхронизируется при старте).
 
 ## Быстрый старт
 
-### 1. Датчик
-
-Датчик **LYWSD03MMC** (MAC `A4:C1:38:20:64:92`) перепрошит на ATC_MiThermometer v5.9, протокол Custom (без шифрования).
-
-### 2. Установка зависимостей
+### 1. Установка зависимостей
 
 ```bash
 cd weather-table
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# или
-source .venv/bin/activate     # Linux
-
+python3 -m venv .venv
+source .venv/bin/activate        # Linux
+# .venv\Scripts\activate         # Windows
 pip install -r requirements.txt
 ```
 
-### 3. Конфигурация
+### 2. Конфигурация
 
-Основные параметры в `config.py`:
+Параметры читаются из `config.py` и переопределяются через `.env` (файл не публиковать, он в `.gitignore`).
 
-| Параметр | Значение по умолчанию | Описание |
+| Переменная | По умолчанию | Описание |
 |---|---|---|
-| `SENSOR_MAC` | `A4:C1:38:20:64:92` | MAC-адрес датчика |
-| `AGGREGATION_WINDOW_SECONDS` | `60` | Окно усреднения (сек) |
-| `API_HOST` | `0.0.0.0` | Хост API |
-| `API_PORT` | `8000` | Порт API |
+| `AGGREGATION_WINDOW_SECONDS` | `60` | Окно усреднения BLE-пакетов (сек). На HELOR стоит `180` |
+| `WEATHER_PROVIDER` | `wttr` | Основной погодный провайдер: `wttr`, `met-norway`, `open-meteo`, `weatherapi` |
+| `WEATHER_POLL_SECONDS` | `3600` | Как часто опрашивать погоду |
+| `WEATHER_LAT`, `WEATHER_LON` | `55.7558`, `37.6173` | Координаты уличной погоды |
+| `WEATHER_TIMEZONE` | `Europe/Moscow` | Часовой пояс локации |
+| `WEATHER_API_KEY` | пусто | Ключ WeatherAPI.com (необязателен, запасной провайдер) |
+| `WEATHER_USER_AGENT` | `weather-table/1.0 github.com/vsuh` | User-Agent для MET Norway и wttr.in |
+| `WEATHER_CONNECT_TIMEOUT`, `WEATHER_HTTP_TIMEOUT` | `5`, `20` | Таймауты HTTP-запросов к погоде (сек) |
+| `WEATHER_PAST_HOURS` | `48` | Глубина истории у Open-Meteo (часов) |
+| `RETENTION_DAYS` | `0` | Хранить показания N дней (0 — без ограничений) |
+| `LOG_LEVEL`, `LOG_FORMAT` | `INFO`, `text` | Уровень и формат логов (`text` или `json`) |
 
-Переопределяются через `.env`:
-
-```env
-AGGREGATION_WINDOW_SECONDS=60
-LOG_LEVEL=INFO
-```
-
-### 4. Запуск
-
-#### Коллектор (сбор + агрегация)
+### 3. Запуск
 
 ```bash
-python collector/main.py
+python collector/main.py                                   # коллектор (BLE + погода)
+uvicorn api.main:app --host 0.0.0.0 --port 8000            # API + дашборд
 ```
 
-#### API + Дашборд
+Дашборд: `http://localhost:8000/`.
 
-```bash
-uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-```
+## Уличная погода (`outdoor`)
 
-Дашборд доступен по `http://localhost:8000/`
+Уличный датчик хранит **наблюдённые значения** (факт), а не прогноз: часы, которые ещё не наступили, отбрасываются. Записи делаются раз в час по принципу upsert (час уже есть — значения обновляются).
+
+| Провайдер | Что отдаёт | Заметки |
+|---|---|---|
+| `wttr` (основной) | снимок текущего часа | wttr.in, компактный формат `%t\|%h`; JSON-режим `j1` с HELOR тормозит и не используется |
+| `met-norway` | снимок текущего часа | api.met.no, нужен User-Agent; модель занижает T в Москве примерно на 1 °C |
+| `open-meteo` | история за `WEATHER_PAST_HOURS` часов | **с HELOR недоступен** (соединение с `api.open-meteo.com:443` не устанавливается) |
+| `weatherapi` | почасовой ряд за сегодня | только если задан `WEATHER_API_KEY`; бывают таймауты |
+
+Если основной провайдер ничего не вернул, пробуются остальные по очереди. Если не ответил никто, включается backoff (`WEATHER_BACKOFF_*`). Ошибки провайдеров пишутся в лог без URL и ключей. Значения — модельные, не станции; по контрольным замерам (Яндекс, Google) температура совпадает до ~1 °C, влажность у разных источников расходится заметно.
+
+Тест без сети: `python test_weather.py`.
 
 ## REST API
 
 | Endpoint | Метод | Описание |
 |---|---|---|
-| `/api/readings` | GET | Последние N показаний |
-| `/api/readings/latest` | GET | Самое свежее показание |
-| `/api/stats/summary` | GET | Min/Max/Avg статистика |
-| `/api/readings/time-series?hours=24` | GET | Данные для графика |
+| `/api/sensors` | GET | Список датчиков |
+| `/api/readings` | GET | Последние N показаний (`sensor_id`, `limit`, `offset`) |
+| `/api/readings/latest` | GET | Самое свежее показание (`sensor_id`) |
+| `/api/readings/time-series` | GET | Данные для графика по окнам агрегации (`hours` до 720, `sensor_id`, `all_sensors`) |
+| `/api/readings/hourly` | GET | Почасовые min/avg/max температуры и влажности (`hours` до 2160, `sensor_id` или `all_sensors=true`) |
+| `/api/stats/summary` | GET | Min/Max/Avg (`sensor_id`) |
+| `/api/status`, `/health` | GET | Свежесть данных по датчикам (`/health` отвечает 503, если есть проблемы) |
+| `/metrics` | GET | Метрики Prometheus |
+| `/api/cleanup?days=N` | POST | Удалить показания старше N дней |
 
-Пример запроса:
+Пример:
 ```bash
-curl http://localhost:8000/api/readings/latest
-# {
-#   "id": 42,
-#   "sensor_mac": "A4:C1:38:20:64:92",
-#   "temperature": 23.5,
-#   "humidity": 45.2,
-#   "battery_mv": 3200,
-#   "battery": 87,
-#   "packets_count": 65,
-#   "recorded_at": "2026-09-22T13:30:00+00:00"
-# }
+curl "http://localhost:8000/api/readings/latest?sensor_id=living_room"
+# {"id": 1062, "sensor_id": "living_room", "source": "ble",
+#  "temperature": 24.95, "humidity": 36.64, "battery_mv": 2971, "battery": 96,
+#  "packets_count": 8, "recorded_at": "2026-10-10T21:11:18Z"}
+
+curl "http://localhost:8000/api/readings/hourly?hours=24&sensor_id=living_room"
+# {"sensor_id": "living_room",
+#  "timestamps": ["2026-10-10T21:00:00Z", ...],
+#  "temperatures": [24.97, ...], "temp_min": [24.93, ...], "temp_max": [25.0, ...],
+#  "humidities": [36.7, ...], "hum_min": [...], "hum_max": [...],
+#  "readings": [20, ...], "packets": [160, ...]}
 ```
+
+Время в БД хранится в UTC без указания пояса, в ответах API все моменты времени отдаются в UTC с суффиксом `Z` (браузер переводит их в местное время). Каждая запись BLE — среднее за окно агрегации (`packets_count` измерений). Почасовая выборка `/api/readings/hourly` группирует записи по часам UTC [HH:00, HH:59]; последний (текущий) час может быть неполным, число записей в каждом часе отдаётся в `readings`. Записи из будущего (`recorded_at` позже текущего момента) во всех выборках игнорируются. Дашборд переключает разрешение графика: «Авто» (почасовая выборка начиная с 7 дней), «По окнам», «По часам».
 
 ## Деплой на HELOR (Ubuntu 24.04)
 
-### 1. Развертывание
+Рабочая копия — `/opt/weather-table`, сервис запускается из неё (`WorkingDirectory=/opt/weather-table`, интерпретатор `/opt/weather-table/.venv/bin/python`). БД: `/opt/weather-table/data/weather.db`.
 
 ```bash
-cd /home/ubuntu/weather-table
-
-# Виртуальное окружение
-python3 -m venv .venv
-source .venv/bin/activate
+cd /opt/weather-table
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
 
-### 2. systemd сервисы
-
-**Коллектор:**
-```bash
 sudo cp systemd/weather-collector.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now weather-collector
-```
-
-**API:**
-```bash
 sudo cp systemd/weather-api.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now weather-api
+sudo systemctl enable --now weather-collector weather-api
 ```
 
-### 3. Проверка
-
+Проверка и логи:
 ```bash
-curl http://localhost:8000/api/readings/latest
-# Открыть http://<HELOR_IP>:8000/
-```
-
-### 4. Логи
-
-```bash
+systemctl status weather-collector --no-pager
 journalctl -u weather-collector -f
-journalctl -u weather-api -f
+curl http://localhost:8000/health
 ```
+
+После обновления кода: подтянуть изменения в `/opt/weather-table` и `sudo systemctl restart weather-collector weather-api`. Источник истины для кода — git-репозиторий (vault); правки вносятся там и выкатываются в `/opt/weather-table`.
+
+### Docker (опционально)
+
+`docker-compose.yml` поднимает коллектор, API, Prometheus и Grafana (`docker-compose up -d`, Grafana — порт 3000, Prometheus — 9090). Коллектор запущен с `network_mode: host`, но для BLE внутри контейнера обычно требуется ещё доступ к D-Bus BlueZ (сокет `/var/run/dbus`), в compose он пока не проброшен — поэтому на HELOR коллектор запускается через systemd.
 
 ## Структура проекта
 
 ```
 weather-table/
 ├── collector/
-│   ├── ble_reader.py      # Сканирование BLE (bleak)
-│   ├── parser.py           # Парсер ATC Custom + BTHome
-│   ├── aggregator.py       # Dedup, накопление, усреднение
-│   └── main.py             # Точка входа коллектора
+│   ├── main.py            # точка входа коллектора
+│   ├── registry.py        # загрузка sensors.yaml
+│   ├── ble_reader.py      # BLE-скан (bleak)
+│   ├── parser.py          # парсеры ATC Custom и BTHome
+│   ├── aggregator.py      # dedup, усреднение, запись, цикл погоды
+│   └── weather.py         # погодные провайдеры (только факт)
 ├── storage/
-│   ├── models.py           # SQLAlchemy модели
-│   └── database.py         # Инициализация БД
+│   ├── models.py          # SQLAlchemy: Sensor, Reading
+│   ├── database.py        # SQLite, сессии, синхронизация датчиков
+│   └── retention.py       # очистка старых данных
 ├── api/
-│   ├── main.py             # FastAPI приложение
-│   └── templates/
-│       └── dashboard.html  # Chart.js дашборд
-├── systemd/                # systemd unit files
-├── scan.py                 # Скрипт диагностики BLE
-├── p.py                    # Тестовый парсер пакетов
-├── test_aggregator.py      # Тест логики агрегации
-├── config.py               # Конфигурация
-├── requirements.txt
-└── task.md                 # Описание задачи
+│   ├── main.py            # FastAPI: REST + дашборд
+│   ├── health.py          # оценка свежести данных
+│   ├── metrics.py         # метрики Prometheus
+│   └── templates/dashboard.html
+├── grafana/, prometheus.yml, docker-compose.yml, Dockerfile
+├── systemd/               # unit-файлы
+├── sensors.yaml           # список датчиков
+├── config.py, logging_utils.py
+├── scan.py                # диагностика BLE
+├── p.py                   # разбор сырого пакета
+├── test_aggregator.py, test_weather.py, test_hourly.py
+└── task.md                # описание задачи и журнал
 ```
 
 ## Диагностика
 
-### Тест логики агрегации
+### Проверка датчиков (`scan.py`)
+
+Слушает эфир и печатает разбор пакетов только от датчиков из `sensors.yaml`:
 
 ```bash
-python test_aggregator.py
-# Проверяет dedup по counter: 5 пакетов -> 2 уникальных измерения + 3 дубликата
+python scan.py                     # 10 секунд
+python scan.py --duration 60       # 60 секунд
+python scan.py --continuous        # непрерывно
+python p.py 92642038c1a46c094c183c36570500    # разобрать пакет вручную, без BLE
 ```
 
-### Скрипт сканирования `scan.py`
+Если датчик не найден, посмотрите весь эфир без фильтра по MAC (в нём должны быть `ATC_xxxxxx`) и состояние адаптера.
 
-Использовать на HELOR для отладки BLE:
+### Bluetooth на HELOR
 
 ```bash
-cd /home/ubuntu/weather-table
-source .venv/bin/activate
-
-# Сканировать бродкасты 10 секунд
-python scan.py
-
-# Сканировать 30 секунд
-python scan.py --duration 30
-
-# Непрерывный режим
-python scan.py --continuous
-
-# Тестовый пакет (локально, без BLE)
-python p.py
-python p.py 92642038c1a46c094c183c36570500
+bluetoothctl show | grep -E "Powered|Controller"
+sudo systemctl start bluetooth && sudo bluetoothctl power on
+bluetoothctl --timeout 25 scan on | grep -iE "ATC_|A4:C1:38"
 ```
-
-### Настройка Bluetooth на HELOR
-
-```bash
-# Проверить адаптер
-bluetoothctl show
-
-# Включить
-sudo systemctl start bluetooth
-sudo bluetoothctl power on
-
-# Проверить видимость датчика (btmgmt)
-sudo btmgmt find
-
-# Добавить пользователя в группу bluetooth
-sudo usermod -aG bluetooth ubuntu
-```
-
-### Возможные проблемы
 
 | Проблема | Решение |
 |---|---|
 | `No adapters found` | `sudo systemctl start bluetooth` |
-| `Permission denied` | `sudo usermod -aG bluetooth $USER` + перезаход |
-| Датчик не виден | Проверить LED (должен мигать), `sudo btmgmt find` |
-| `bleak` не установлен | `pip install bleak` |
+| Датчик не виден | Слабый сигнал (RSSI около −90 дБм — предел); переставить датчик или взять USB-донгл BT 5.0 на удлинителе |
+| Пакеты приходят редко | Нормально: BlueZ не отдаёт все пакеты, поэтому усреднение работает по тому, что дошло |
+| Погода не обновляется | Смотреть `journalctl -u weather-collector \| grep -i weather`, проверять доступность провайдеров с HELOR |
 
-## Форматы данных датчика
+## Форматы рассылки датчика
 
-### ATC Custom (UUID 0x181A) — текущий формат
+### ATC Custom / pvvx (UUID `0x181A`) — используется сейчас
 
-Формат бродкаста (15+ байт):
+Service data, 15 байт:
 
 | Смещение | Поле | Размер | Тип | Единица |
 |---|---|---|---|---|
-| 0..5 | MAC | 6B | — | — |
-| 6..7 | Температура | 2B | int16 LE | /100 °C |
-| 8..9 | Влажность | 2B | uint16 LE | /100 % |
-| 10..11 | Батарея мВ | 2B | uint16 LE | mV |
-| 12 | Батарея % | 1B | uint8 | % |
-| 13 | Counter | 1B | uint8 | — |
-| 14 | Flags | 1B | uint8 | — |
+| 0..5 | MAC (в обратном порядке) | 6 B | — | — |
+| 6..7 | Температура | 2 B | int16 LE | /100 °C |
+| 8..9 | Влажность | 2 B | uint16 LE | /100 % |
+| 10..11 | Напряжение батареи | 2 B | uint16 LE | мВ |
+| 12 | Заряд | 1 B | uint8 | % |
+| 13 | Counter | 1 B | uint8 | — |
+| 14 | Flags | 1 B | uint8 | — |
 
-Пример пакета:
+Пример реального пакета:
 ```
-92 64 20 38 c1 a4 6c 09 4c 18 3c 36 87 05 00
-MAC        T=24.12  RH=62.2  BAT=13756mV 87%  CNT=5  FLG=0x00
+92 64 20 38 c1 a4 | 83 09 | 42 0f | 99 0b | 60 | d2 | 05
+MAC (A4:C1:38:20:64:92)  24.35 °C  39.06 %  2969 мВ  96 %  counter 210  flags 0x05
 ```
 
-### BTHome v2 (UUID 0x181C) — альтернативный формат ATC
+Counter растёт на 1 с каждым новым измерением; пакеты с тем же counter — повторы, их отсекает dedup.
 
-| Data ID | Поле | Размер | Единица |
+### BTHome v2 (UUID `0xFCD2`) — открытый стандарт, пока не используется
+
+BTHome — открытый формат BLE-рассылки датчиков (bthome.io), который «из коробки» понимает Home Assistant. Структура service data: первый байт — device info (бит 0 — шифрование, биты 5–7 — версия, для v2 равна 2), далее объекты `[id][значение]` фиксированной длины:
+
+| ID | Поле | Размер | Единица |
 |---|---|---|---|
-| `0x0001` | Температура | 2B signed | 0.01°C |
-| `0x0002` | Влажность | 2B unsigned | 0.01% |
-| `0x000B` | Батарея | 1B | % |
+| `0x00` | Packet id | 1 B | — |
+| `0x01` | Батарея | 1 B | % |
+| `0x02` | Температура | 2 B int16 LE | 0.01 °C |
+| `0x03` | Влажность | 2 B uint16 LE | 0.01 % |
+| `0x0C` | Напряжение | 2 B uint16 LE | 0.001 В |
 
-Подробнее: https://bthome.io/
+Пример: `40 02 CA 09 03 BF 13` — 25.06 °C, 50.55 %.
+
+**Внимание:** `parse_bthome_v2()` в `collector/parser.py` и константа `BTHOME_SERVICE_UUID` (`0x181C`, это UUID устаревшего BTHome v1) пока не соответствуют спецификации v2: версия берётся из битов 4–7 вместо 5–7 (поэтому настоящие пакеты v2 отбрасываются), а ID и длина читаются как LEB128 вместо однобайтового ID с фиксированной длиной. Для текущих датчиков (`protocol: atc`) это не мешает; перед переходом на `protocol: bthome` парсер нужно переписать (см. `task.md`).
 
 ## Алгоритм агрегации
 
-Коллектор работает непрерывно:
+1. **BLE-скан** — `bleak` вызывает callback на каждый принятый пакет датчика.
+2. **Dedup** — по `counter`: тот же counter — повтор, новый — новое измерение.
+3. **Накопление** — уникальные измерения копятся в окне (`AGGREGATION_WINDOW_SECONDS`, на HELOR 180 с).
+4. **Свёртка** — среднее по температуре, влажности и батарее за окно.
+5. **Запись** — одна строка в `readings` с `packets_count`.
 
-1. **BLE-скан** — bleak `detection_callback` ловит каждый пакет
-2. **Dedup** — если `counter` изменился, это новое измерение; если тот же — пакет дубликат
-3. **Накопление** — пакеты с одинаковым counter складываются в окно (по умолчанию 60 сек)
-4. **Свёртка** — средние значения температуры, влажности, батареи за окно
-5. **Запись** — одно усреднённое показание в БД с `packets_count`
-
-Результат: ~60 показаний в день (1 на минуту) вместо ~86400 сырых пакетов.
+Датчик рассылает пакет примерно раз в 22–25 с, поэтому в окне 180 с обычно 6–9 измерений, то есть около 20 записей в час на датчик (≈480 в сутки). Почасовые значения отдаёт API: `/api/readings/hourly` (усреднение записей по часам UTC) и тот же режим на графике дашборда.
