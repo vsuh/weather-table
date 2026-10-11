@@ -25,10 +25,29 @@ BTHOME_CHAR_UUID: str = "00002a2f-0000-1000-8000-00805f9b34fb"
 WEATHER_LAT: float = float(os.getenv("WEATHER_LAT", "55.7558"))
 WEATHER_LON: float = float(os.getenv("WEATHER_LON", "37.6173"))
 WEATHER_TIMEZONE: str = os.getenv("WEATHER_TIMEZONE", "Europe/Moscow")
-# Как часто обновлять прогноз (сек).
+# Как часто опрашивать провайдера (сек).
 WEATHER_POLL_SECONDS: int = int(os.getenv("WEATHER_POLL_SECONDS", "3600"))
-# WeatherAPI.com (бесплатный: 1000 запросов/день).
-# Ключ получить на https://www.weatherapi.com/
+# Основной провайдер: 'wttr' | 'met-norway' | 'open-meteo' | 'weatherapi'.
+# Остальные пробуются по порядку как запасные (WeatherAPI — только если задан ключ).
+# MET Norway и wttr.in дают снимок текущего часа, Open-Meteo — ещё и историю.
+# MET Norway — глобальная модель (в наблюдениях для Москвы занижает T на ~1 °C и завышает RH),
+# wttr.in лучше совпадает с бытовыми сервисами.
+WEATHER_PROVIDER: str = os.getenv("WEATHER_PROVIDER", "wttr").strip().lower()
+# Сколько часов в прошлое запрашивать у Open-Meteo (только он отдаёт историю). Хранятся только
+# наступившие часы (факт), будущие (прогноз) отбрасываются. Для разового
+# дозаполнения истории можно временно поставить, например, 400.
+WEATHER_PAST_HOURS: int = int(os.getenv("WEATHER_PAST_HOURS", "48"))
+# Таймауты HTTP-запроса к провайдеру (сек): на подключение и на чтение ответа.
+WEATHER_CONNECT_TIMEOUT: int = int(os.getenv("WEATHER_CONNECT_TIMEOUT", "5"))
+WEATHER_HTTP_TIMEOUT: int = int(os.getenv("WEATHER_HTTP_TIMEOUT", "20"))
+# MET Norway требует идентифицирующий User-Agent (приложение + контакт).
+WEATHER_USER_AGENT: str = os.getenv(
+    "WEATHER_USER_AGENT", "weather-table/1.0 github.com/vsuh"
+)
+WEATHER_MET_URL: str = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+WEATHER_WTTR_URL: str = "https://wttr.in"
+WEATHER_OPEN_METEO_URL: str = "https://api.open-meteo.com/v1/forecast"
+# WeatherAPI.com (запасной, бесплатный: 1000 запросов/день). Ключ необязателен.
 WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")
 WEATHER_API_URL: str = "https://api.weatherapi.com/v1/forecast.json"
 # Circuit-breaker: макс. время ожидания при сбоях (сек).

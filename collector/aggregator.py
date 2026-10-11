@@ -10,8 +10,9 @@
   5. Окно сбрасывается.
 
 Для погодных датчиков (source=weather):
-  - Раз в WEATHER_POLL_SECONDS берём почасовые данные WeatherAPI.com
-    и пишем каждое часовое значение отдельной записью (upsert по времени).
+  - Раз в WEATHER_POLL_SECONDS берём почасовые наблюдения (Open-Meteo,
+    запасной — WeatherAPI.com) и пишем каждый наступивший час отдельной
+    записью (upsert по времени). Прогноз на будущие часы не сохраняется.
   - Circuit-breaker с exponential backoff при сбоях.
 """
 
@@ -192,46 +193,72 @@ def _parse_payload(protocol: str, service_uuid: str, raw_data: bytes) -> Optiona
 # Weather ingestion
 # ============================================================
 
-def ingest_weather(sensor: SensorConfig) -> int:
-    """Записывает почасовые данные WeatherAPI.com как показания датчика.
+def _naive_utc(dt: datetime) -> datetime:
+    """UTC без tzinfo — так SQLite отдаёт recorded_at (для сравнения с БД)."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
-    Дедупликация: пропускаем часы, для которых уже есть запись.
+
+def ingest_weather(sensor: SensorConfig) -> tuple[int, int]:
+    """Записывает почасовые наблюдения погоды как показания датчика.
+
+    Upsert по часу: новые часы добавляются, у уже записанных значения
+    обновляются, если провайдер их уточнил. Будущие часы (прогноз) сюда
+    не попадают — их отсекает collector.weather.
 
     Returns:
-        Количество новых записей.
+        (добавлено, обновлено).
+
+    Raises:
+        RuntimeError: если провайдеры не вернули данных (учитывается
+        circuit-breaker'ом в _weather_loop).
     """
     records = weather.fetch_hourly_weather()
     if not records:
-        return 0
+        raise RuntimeError("weather providers returned no data")
 
-    written = 0
+    by_ts = {_naive_utc(r["time"]): r for r in records if r.get("time") is not None}
+    if not by_ts:
+        raise RuntimeError("weather records have no timestamps")
+
+    written = updated = 0
     with get_session() as session:
         existing = {
-            r[0] for r in session.execute(
-                select(Reading.recorded_at).where(Reading.sensor_id == sensor.id)
-            ).all()
+            row.recorded_at: row
+            for row in session.execute(
+                select(Reading).where(
+                    Reading.sensor_id == sensor.id,
+                    Reading.recorded_at >= min(by_ts),
+                )
+            ).scalars()
         }
 
-        for rec in records:
-            ts = rec["time"]
-            if ts is None or ts in existing:
-                continue
-            session.add(Reading(
-                sensor_id=sensor.id,
-                source="weather",
-                temperature=rec["temperature"],
-                humidity=rec["humidity"],
-                packets_count=1,
-                recorded_at=ts,
-            ))
-            written += 1
-            readings_total.labels(
-                sensor_id=sensor.id, source="weather"
-            ).inc()
+        for ts, rec in by_ts.items():
+            row = existing.get(ts)
+            if row is None:
+                session.add(Reading(
+                    sensor_id=sensor.id,
+                    source="weather",
+                    temperature=rec["temperature"],
+                    humidity=rec["humidity"],
+                    packets_count=1,
+                    recorded_at=ts,
+                ))
+                written += 1
+                readings_total.labels(
+                    sensor_id=sensor.id, source="weather"
+                ).inc()
+            elif (row.temperature, row.humidity) != (rec["temperature"], rec["humidity"]):
+                row.temperature = rec["temperature"]
+                row.humidity = rec["humidity"]
+                updated += 1
 
-    if written:
-        logger.info("[%s] Weather: wrote %d new hourly records", sensor.id, written)
-    return written
+    logger.info(
+        "[%s] Weather: %d new, %d updated hourly records",
+        sensor.id, written, updated,
+    )
+    return written, updated
 
 
 async def _weather_loop(registry: SensorRegistry) -> None:
@@ -255,19 +282,15 @@ async def _weather_loop(registry: SensorRegistry) -> None:
             any_success = False
             for sensor in weather_sensors:
                 try:
-                    n = ingest_weather(sensor)
-                    if n > 0:
-                        logger.info("[%s] Weather: %d new records", sensor.id, n)
-                        failures[sensor.id] = 0  # сброс backoff
-                        any_success = True
-                    else:
-                        # Нет новых записей — не считаем за ошибку
-                        pass
-                except Exception:
+                    # requests блокирующий — выносим в поток, чтобы не стопорить BLE-сканер
+                    await asyncio.to_thread(ingest_weather, sensor)
+                    failures[sensor.id] = 0  # успешный опрос — сброс backoff
+                    any_success = True
+                except Exception as exc:
                     failures[sensor.id] = failures.get(sensor.id, 0) + 1
                     logger.warning(
-                        "[%s] Weather ingest failed (failures=%d): %s",
-                        sensor.id, failures[sensor.id],
+                        "[%s] Weather ingest failed (failures=%d): %s: %s",
+                        sensor.id, failures[sensor.id], type(exc).__name__, exc,
                     )
 
             # Вычисляем следующий интервал
