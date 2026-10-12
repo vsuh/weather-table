@@ -27,7 +27,7 @@ from sqlalchemy import select
 
 from storage.database import get_session
 from storage.models import Reading
-from collector.parser import SensorReading, parse_atc_custom, parse_bthome_v2
+from collector.parser import SensorReading, parse_atc_custom
 from collector.registry import SensorRegistry, SensorConfig
 from collector.ble_reader import run_scanner
 from collector import weather
@@ -181,12 +181,13 @@ class AggregatorManager:
 
 
 def _parse_payload(protocol: str, service_uuid: str, raw_data: bytes) -> Optional[SensorReading]:
-    """Выбирает парсер по протоколу датчика (или UUID как fallback)."""
+    """Выбирает парсер по протоколу датчика (или UUID как fallback).
+
+    Поддерживается только ATC Custom (pvvx, UUID 0x181A).
+    """
     uuid = service_uuid.lower()
     if protocol == "atc" or "181a" in uuid:
         return parse_atc_custom(raw_data)
-    if protocol == "bthome" or "181c" in uuid:
-        return parse_bthome_v2(raw_data)
     return None
 
 

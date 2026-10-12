@@ -4,7 +4,6 @@
 Использование:
     python scan.py                    # сканировать 10 секунд
     python scan.py --duration 30      # сканировать 30 секунд
-    python scan.py --gatt             # подключиться по GATT
     python scan.py --continuous       # непрерывный режим
 """
 
@@ -14,7 +13,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 
-from bleak import BleakScanner, BleakClient
+from bleak import BleakScanner
 from collector.registry import load_registry
 
 logging.basicConfig(
@@ -24,9 +23,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# UUID сервисов ATC firmware
+# UUID сервиса ATC firmware (pvvx custom)
 ATC_SERVICE_UUID = "0000181a-0000-1000-8000-00805f9b34fb"
-BTHOME_SERVICE_UUID = "0000181c-0000-1000-8000-00805f9b34fb"
 
 
 def parse_atc_custom(data: bytes):
@@ -41,57 +39,6 @@ def parse_atc_custom(data: bytes):
     result["battery"] = data[12]
     result["counter"] = data[13]
     result["flags"] = data[14]
-    return result
-
-
-def parse_bthome_v2(data: bytes):
-    """Парсит BTHome v2 payload."""
-    if not data or len(data) < 1:
-        return None
-
-    control_byte = data[0]
-    version = (control_byte >> 4) & 0x0F
-    if version != 2:
-        return None
-
-    offset = 1
-    result = {}
-    data_len = len(data)
-
-    while offset < data_len:
-        data_id = 0
-        shift = 0
-        while offset < data_len:
-            byte = data[offset]
-            data_id |= (byte & 0x7F) << shift
-            offset += 1
-            if (byte & 0x80) == 0:
-                break
-            shift += 7
-
-        data_length = 0
-        shift = 0
-        while offset < data_len:
-            byte = data[offset]
-            data_length |= (byte & 0x7F) << shift
-            offset += 1
-            if (byte & 0x80) == 0:
-                break
-            shift += 7
-
-        if offset + data_length > data_len:
-            break
-
-        value_bytes = data[offset:offset + data_length]
-        offset += data_length
-
-        if data_id == 0x0001:
-            result["temperature"] = int.from_bytes(value_bytes, "little", signed=True) / 100.0
-        elif data_id == 0x0002:
-            result["humidity"] = int.from_bytes(value_bytes, "little") / 100.0
-        elif data_id == 0x000B:
-            result["battery"] = value_bytes[0]
-
     return result
 
 
@@ -119,18 +66,6 @@ def format_packet(mac: str, rssi: int, raw: bytes, service_uuid: str) -> str:
         lines.append(f"  Батарея:     {reading['battery_mv']}mV ({reading['battery']}%)")
         lines.append(f"  Counter:     {reading['counter']}")
         lines.append(f"  Flags:       0x{reading['flags']:02X}")
-        return "\n".join(lines)
-
-    # Пробуем BTHome v2
-    reading = parse_bthome_v2(raw)
-    if reading:
-        lines.append(f"\nРаспаршено (BTHome v2 / 0x181C):")
-        if "temperature" in reading:
-            lines.append(f"  Температура: {reading['temperature']}°C")
-        if "humidity" in reading:
-            lines.append(f"  Влажность:   {reading['humidity']}%")
-        if "battery" in reading:
-            lines.append(f"  Батарея:     {reading['battery']}%")
         return "\n".join(lines)
 
     lines.append(f"\n[!] Не удалось распознать формат")
@@ -162,13 +97,6 @@ async def scan_bcast(duration: int = 10) -> bool:
                 packet_data = value
                 matched_uuid = uuid
                 break
-        if not packet_data:
-            for uuid, value in service_data.items():
-                uuid_str = str(uuid).lower()
-                if uuid_str == BTHOME_SERVICE_UUID.lower():
-                    packet_data = value
-                    matched_uuid = uuid
-                    break
 
         if packet_data:
             sensor = mac_map[mac]

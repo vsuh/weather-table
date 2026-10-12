@@ -2,9 +2,9 @@
 
 import asyncio
 import logging
-from typing import Callable, Optional
+from typing import Callable
 
-from bleak import BleakScanner, BleakClient
+from bleak import BleakScanner
 
 import config
 from collector.registry import SensorRegistry, SensorConfig
@@ -13,22 +13,15 @@ logger = logging.getLogger(__name__)
 
 
 def _find_service_data(service_data: dict) -> tuple[bytes, str]:
-    """Ищет payload среди service data.
-
-    Приоритет: ATC Custom (0x181A) → BTHome v2 (0x181C).
+    """Ищет payload ATC Custom (UUID 0x181A) среди service data.
 
     Returns:
         (payload_bytes, matched_uuid) или (b"", "").
     """
     atc = config.ATC_SERVICE_UUID.lower()
-    bthome = config.BTHOME_SERVICE_UUID.lower()
 
     for uuid, value in service_data.items():
         if str(uuid).lower() == atc:
-            return bytes(value), str(uuid)
-
-    for uuid, value in service_data.items():
-        if str(uuid).lower() == bthome:
             return bytes(value), str(uuid)
 
     return b"", ""
@@ -74,18 +67,3 @@ async def run_scanner(
     finally:
         await scanner.stop()
         logger.info("BLE scanner stopped")
-
-
-async def read_sensor_direct(mac: str) -> Optional[bytes]:
-    """Подключается к датчику по GATT и читает BTHome-характеристику."""
-    logger.info("Connecting to sensor %s...", mac)
-    try:
-        async with BleakClient(mac) as client:
-            if client.is_connected:
-                data = await client.read_gatt_char(config.BTHOME_CHAR_UUID)
-                logger.info("Read %d bytes from %s via GATT", len(data), mac)
-                return bytes(data)
-    except Exception as e:
-        logger.warning("Direct GATT read failed for %s: %s", mac, e)
-
-    return None

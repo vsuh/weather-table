@@ -5,10 +5,11 @@
 #   name     — человекочитаемое имя
 #   location — место установки (комната, подвал, улица)
 #   source   — тип источника:
-#                ble     — BLE-датчик (нужен mac и protocol)
-#                weather — внешний погодный провайдер (Open-Meteo, см. WEATHER_PROVIDER)
+#                ble     — BLE-датчик (нужен mac; protocol — по умолчанию atc)
+#                weather — внешний погодный провайдер (см. WEATHER_PROVIDER в .env)
 #   mac      — MAC-адрес (только для source: ble)
-#   protocol — формат данных: atc | bthome (только для source: ble)
+#   protocol — формат рассылки (только для source: ble); поддерживается atc —
+#              прошивка ATC_MiThermometer pvvx, формат custom (UUID 0x181A)
 
 sensors:
   - id: living_room
@@ -25,8 +26,9 @@ sensors:
     mac: "A4:C1:38:3D:B6:AF"
     protocol: atc
 
-  # Уличная погода (наблюдения за прошедшие часы) от Open-Meteo; координаты в .env.
+  # Уличная погода (наблюдения за прошедшие часы) от провайдера из WEATHER_PROVIDER;
+  # координаты в .env.
   - id: outdoor
-    name: Улица (Open-Meteo)
+    name: Улица
     location: outdoor
     source: weather

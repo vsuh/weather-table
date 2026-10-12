@@ -16,13 +16,13 @@ ATC Custom format (UUID 0x181A):
 """
 
 import sys
-from collector.parser import parse_atc_custom, parse_bthome_v2
+from collector.parser import parse_atc_custom
 
 # Пробный ATC Custom пакет (15 байт):
 #   MAC: 92 64 20 38 c1 a4
 #   T:   6c 09 → 2412 → 24.12°C
 #   RH:  4c 18 → 6220 → 62.20%
-#   BAT: 3c 36 → 13756 mV
+#   BAT: 3c 36 → 13884 mV (пробные данные, у реального датчика около 3000 mV)
 #   BAT%: 87 (0x57)
 #   CNT: 05
 #   FLG: 00
@@ -66,18 +66,5 @@ if reading:
         print(f"  Flags:       0x{reading.flags:02X}")
     print(f"{'='*40}")
 else:
-    # Пробуем BTHome v2
-    reading = parse_bthome_v2(raw_data)
-    if reading:
-        print(f"\n{'='*40}")
-        print("Распаршено (BTHome v2):")
-        if reading.temperature is not None:
-            print(f"  Температура: {reading.temperature}°C")
-        if reading.humidity is not None:
-            print(f"  Влажность:   {reading.humidity}%")
-        if reading.battery is not None:
-            print(f"  Батарея:     {reading.battery}%")
-        print(f"{'='*40}")
-    else:
-        print("\n[!] Не удалось распарсить пакет")
-        sys.exit(1)
+    print("\n[!] Не удалось распарсить пакет")
+    sys.exit(1)

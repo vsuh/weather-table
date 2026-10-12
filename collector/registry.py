@@ -11,6 +11,9 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Поддерживаемые форматы рассылки BLE-датчиков (поле protocol в sensors.yaml).
+SUPPORTED_PROTOCOLS = {"atc"}  # atc = ATC_MiThermometer pvvx custom (UUID 0x181A)
+
 
 @dataclass
 class SensorConfig:
@@ -20,7 +23,7 @@ class SensorConfig:
     location: str
     source: str  # 'ble' | 'weather'
     mac: Optional[str] = None
-    protocol: str = "atc"  # 'atc' | 'bthome' (только для ble)
+    protocol: str = "atc"  # только для ble; см. SUPPORTED_PROTOCOLS
 
 
 @dataclass
@@ -77,6 +80,13 @@ def load_registry(path: Path | None = None) -> SensorRegistry:
 
         if sensor.source == "ble" and not sensor.mac:
             logger.error("BLE sensor %s has no mac, skipped", sensor.id)
+            continue
+
+        if sensor.source == "ble" and sensor.protocol not in SUPPORTED_PROTOCOLS:
+            logger.error(
+                "BLE sensor %s: unsupported protocol %r (supported: %s), skipped",
+                sensor.id, sensor.protocol, ", ".join(sorted(SUPPORTED_PROTOCOLS)),
+            )
             continue
 
         sensors.append(sensor)

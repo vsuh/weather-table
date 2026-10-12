@@ -15,10 +15,6 @@ SENSORS_FILE: Path = BASE_DIR / os.getenv("SENSORS_FILE", "sensors.yaml")
 # --- BLE ---
 # UUID сервиса ATC Custom firmware (PVWX format)
 ATC_SERVICE_UUID: str = "0000181a-0000-1000-8000-00805f9b34fb"
-# UUID сервиса BTHome v2 (альтернативный формат ATC)
-BTHOME_SERVICE_UUID: str = "0000181c-0000-1000-8000-00805f9b34fb"
-# UUID чарактеристики BTHome (GATT)
-BTHOME_CHAR_UUID: str = "00002a2f-0000-1000-8000-00805f9b34fb"
 
 # --- Weather provider ---
 # Координаты локации для уличной погоды (задаются в .env)
