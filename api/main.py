@@ -404,6 +404,8 @@ def api_cleanup(days: int = Query(30, ge=1, le=3650)):
 
 # ---------- Web Dashboard ----------
 @app.get("/", response_class=HTMLResponse)
-def dashboard():
+def dashboard(request: Request):
     """Веб-дашборд с графиками."""
-    return templates.TemplateResponse("dashboard.html", {"request": {}})
+    # Новая сигнатура (request, name): старая TemplateResponse(name, {"request": ...})
+    # удалена в Starlette 1.x и давала 500.
+    return templates.TemplateResponse(request, "dashboard.html")

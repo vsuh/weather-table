@@ -80,6 +80,23 @@ def main():
                     isinstance(latest, dict) and latest["recorded_at"].endswith("Z")
                     and latest["temperature"] == 24.0))
 
+    # Статус здоровья: работает без DetachedInstanceError (объекты Sensor используются после закрытия сессии)
+    report = api_main._health_report()
+    ok.append(check("_health_report работает (без DetachedInstanceError), 1 датчик",
+                    len(report["sensors"]) == 1 and report["sensors"][0]["sensor_id"] == "t"
+                    and report["status"] in ("ok", "stale", "no_data")))
+
+    # Дашборд: шаблон рендерится (раньше давал 500 из-за удалённой в Starlette 1.x старой сигнатуры)
+    from starlette.requests import Request
+    fake_request = Request({
+        "type": "http", "method": "GET", "path": "/", "headers": [],
+        "query_string": b"", "server": ("test", 80), "scheme": "http",
+    })
+    page = api_main.dashboard(fake_request)
+    body = bytes(page.body).lower()
+    ok.append(check("дашборд рендерится: 200 и HTML, есть переключатель разрешения",
+                    page.status_code == 200 and b"<html" in body and b"res-controls" in body))
+
     allok = all(ok)
     print(f"\nRESULT: {'PASS' if allok else 'FAIL'}")
     sys.exit(0 if allok else 1)
