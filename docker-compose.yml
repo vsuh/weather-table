@@ -1,18 +1,24 @@
-# Weather Table: коллектор + API/дашборд + Prometheus + Grafana.
+# Weather Table: Prometheus + Grafana (мониторинг) и, по желанию, коллектор + API.
 #
-# Запуск:  docker compose up -d --build
+# РЕЖИМ 1 (рекомендуется на HELOR): коллектор и API работают под systemd, в Docker только
+# мониторинг. Prometheus ходит за метриками на хост (host.docker.internal:8000).
+#     docker compose up -d                  # поднимет prometheus и grafana
+#
+# РЕЖИМ 2 (всё в Docker, профиль full): коллектор и API тоже в контейнерах. Перед этим
+# ОБЯЗАТЕЛЬНО остановите systemd-сервисы weather-collector и weather-api (конфликт порта 8000,
+# BLE-адаптера и базы данных) и отключите их автозапуск (systemctl disable).
+#     docker compose --profile full up -d --build
+#
 # Дашборд: http://<хост>:8000/   Grafana: http://<хост>:3000   Prometheus: http://<хост>:9090
 #
 # Настройки и секреты — в файле .env рядом с этим файлом (в образ он не копируется,
 # см. .dockerignore). Обязательно задайте GF_ADMIN_PASSWORD (пароль администратора Grafana).
-#
-# ВНИМАНИЕ: не запускайте этот стек одновременно с systemd-сервисами
-# weather-collector / weather-api: будет конфликт порта 8000 и BLE-адаптера.
 
 services:
   # --- Weather collector (BLE + погода + запись в БД) ---
   weather-collector:
     build: .
+    profiles: ["full"]
     command: python collector/main.py
     restart: unless-stopped
     env_file: .env
@@ -27,6 +33,7 @@ services:
   # --- Weather API + dashboard ---
   weather-api:
     build: .
+    profiles: ["full"]
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
     env_file: .env
@@ -55,6 +62,9 @@ services:
     restart: unless-stopped
     ports:
       - "9090:9090"
+    # доступ к API на хосте (systemd) или к опубликованному порту контейнера weather-api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus

@@ -7,4 +7,5 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-          - weather-api:8000
+          # API на хосте (systemd) или порт 8000, опубликованный контейнером weather-api
+          - host.docker.internal:8000

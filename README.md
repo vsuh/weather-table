@@ -169,12 +169,12 @@ curl http://localhost:8000/health
 
 ### Docker (опционально)
 
-`docker-compose.yml` поднимает коллектор, API, Prometheus и Grafana: `docker compose up -d --build`. Дашборд — `:8000`, Grafana — `:3000` (логин `admin`, пароль из `GF_ADMIN_PASSWORD` в `.env`, без него compose не стартует), Prometheus — `:9090`.
+`docker-compose.yml` работает в двух режимах. **Режим 1 (рекомендуется на HELOR):** коллектор и API остаются под systemd, в Docker поднимается только мониторинг: `docker compose up -d` (Prometheus `:9090`, Grafana `:3000`; Prometheus ходит за метриками на хост через `host.docker.internal:8000`). **Режим 2:** `docker compose --profile full up -d --build` добавляет контейнеры коллектора и API (дашборд `:8000`). Grafana: логин `admin`, пароль из `GF_ADMIN_PASSWORD` в `.env`, без него compose не стартует. Запускать нужно из каталога `/opt/weather-table` (или другого каталога с актуальным git-репозиторием), а не из устаревших копий.
 
 - Настройки и секреты читаются из `.env` (`env_file`); в образ файл `.env`, база `data/`, `.git` и `.venv` не попадают (`.dockerignore`). `sensors.yaml` пробрасывается в контейнеры томом, пересборка при его правке не нужна.
 - Для BLE коллектор запускается с `network_mode: host` и с проброшенным сокетом D-Bus (`/var/run/dbus`): `bleak` разговаривает с BlueZ хоста, поэтому на хосте должен работать `bluetooth.service`. Проверено только по конфигурации, запуск на HELOR не выполнялся (там работает systemd).
 - API запускается без `--reload`, у него есть healthcheck по `/health` (503 при устаревших данных — контейнер станет `unhealthy`).
-- Не запускайте Docker-стек одновременно с systemd-сервисами (порт 8000 и BLE-адаптер).
+- Режим 2 (`--profile full`) нельзя совмещать с systemd-сервисами коллектора и API (порт 8000, BLE-адаптер и база `data/weather.db`): сначала `systemctl stop` и `systemctl disable` этих сервисов. Если в контейнере коллектора `FileNotFoundError` на сокете D-Bus, значит, в compose нет проброса `/var/run/dbus` (так было у старой копии `docker-compose.yml`).
 
 ## Структура проекта
 
