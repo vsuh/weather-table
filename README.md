@@ -167,6 +167,12 @@ curl http://localhost:8000/health
 
 После обновления кода: подтянуть изменения в `/opt/weather-table` и `sudo systemctl restart weather-collector weather-api`. Источник истины для кода — git-репозиторий (vault); правки вносятся там и выкатываются в `/opt/weather-table`.
 
+### Восстановление забытого пароля от Grafana
+
+```
+docker compose exec grafana grafana cli admin reset-admin-password 'новый_пароль'
+```
+
 ### Docker (опционально)
 
 `docker-compose.yml` работает в двух режимах. **Режим 1 (рекомендуется на HELOR):** коллектор и API остаются под systemd, в Docker поднимается только мониторинг: `docker compose up -d` (Prometheus `:9090`, Grafana `:3000`; Prometheus ходит за метриками на хост через `host.docker.internal:8000`). **Режим 2:** `docker compose --profile full up -d --build` добавляет контейнеры коллектора и API (дашборд `:8000`). Grafana: логин `admin`, пароль из `GF_ADMIN_PASSWORD` в `.env`, без него compose не стартует. Запускать нужно из каталога `/opt/weather-table` (или другого каталога с актуальным git-репозиторием), а не из устаревших копий.
