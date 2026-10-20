@@ -139,8 +139,7 @@ async def run_scanner(
             health["down_since"] = now
             last_reminder = now
             logger.warning(
-                "BLE недоступен: %s. Повторные попытки с паузой %d-%d с "
-                "(без спама, подробности на уровне DEBUG)",
+                "BLE недоступен: %s. Повторные попытки с паузой %d-%d с ",
                 reason, RETRY_MIN_S, RETRY_MAX_S,
             )
         elif now - last_reminder >= REMINDER_S:
